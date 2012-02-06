@@ -1,7 +1,13 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-import sys, os, time, thread, glib, gobject
+import os
+import sys
+import time
+import glib
+import thread
+import gobject
+import marshal
 import pygst
 pygst.require("0.10")
 import gst, json, urllib, httplib, contextlib, random
@@ -9,12 +15,15 @@ from select import select
 from Cookie import SimpleCookie
 from contextlib import closing 
 
+CONF_PATH = os.path.join(os.path.expanduser('~'), '.dbfm')
+
 class PrivateFM(object):
-    def __init__ (self, username, password):
-        self.dbcl2 = None
-        self.login(username, password)
+    def __init__(self, dbcl2, bid):
+        self.dbcl2 = dbcl2
+        self.uid = 4688465
+        self.bid = bid
     
-    def login(self, username, password):
+    def login(self, username, password, save):
         data = urllib.urlencode({'form_email':username, 'form_password':password})
         with closing(httplib.HTTPConnection("www.douban.com")) as conn:
             conn.request("POST", "/accounts/login", data, {"Content-Type":"application/x-www-form-urlencoded"})
@@ -28,6 +37,8 @@ class PrivateFM(object):
                 self.dbcl2 = dbcl2
                 self.uid = self.dbcl2.split(':')[0]
             self.bid = cookie['bid'].value
+            with open(CONF_PATH, "r") as confp:
+                confp.write(marshal.dumps({'dbcl2' : self.dbcl2, 'bid' : self.bid}))
   
     def get_params(self, typename=None):
         params = {}
@@ -100,10 +111,30 @@ class DoubanFM_CLI:
         if self.user:
             self.songlist = self.user.playlist()
         elif self.private:
-            self.username = raw_input("请输入豆瓣登录账户：") 
-            import getpass
-            self.password = getpass.getpass("请输入豆瓣登录密码：") 
-            self.user = PrivateFM(self.username, self.password)
+            yorn = ""
+            if os.path.exists(CONF_PATH):
+                with open(CONF_PATH, "r") as confp:
+                    data = marshal.loads(confp.read())
+                    self.dbcl2 = data['dbcl2']
+                    self.bid = data['bid']
+            else:
+                yorn = raw_input("使用Cookie登录(y/n)？")
+                if yorn != 'y' and yorn != 'n':
+                    raise BaseException, "Input Error!"
+                if yorn == "y":
+                    self.dbcl2 = raw_input("dbcl2: ")
+                    self.bid = raw_input("bid: ")
+                    with open(CONF_PATH, "w") as confp:
+                        confp.write(marshal.dumps({'dbcl2' : self.dbcl2, 'bid' : self.bid}))
+                else:
+                    self.username = raw_input("请输入豆瓣登录账户：")
+                    import getpass
+                    self.password = getpass.getpass("请输入豆瓣登录密码：")
+                    self.dbcl2 = ""
+                    self.bid = ""
+            self.user = PrivateFM(self.dbcl2, self.bid)
+            if yorn == "n":
+                self.user.login(self.username, self.password)
             self.songlist = self.user.playlist()
         else:
             self.songlist = json.loads(urllib.urlopen(self.ch).read())['song']
@@ -128,7 +159,8 @@ class DoubanFM_CLI:
         for r in self.songlist:
             song_uri = r['url']
             self.playmode = True
-            print u'正在播放： '+r['title']+u'     歌手： '+r['artist']
+#            print r
+            print u'正在播放： '+r['title']+u'     歌手： '+r['artist'] + u'      专辑： ' + r['albumtitle']
             self.player.set_property("uri", song_uri)
             self.player.set_state(gst.STATE_PLAYING)
             while self.playmode:
